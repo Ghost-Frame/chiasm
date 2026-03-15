@@ -21,6 +21,53 @@ export interface FeedEntry {
 }
 
 const BASE = "";
+const API_KEY_STORAGE_KEY = "mission-control-api-key";
+
+function authHeaders(init?: HeadersInit): HeadersInit {
+  const headers = new Headers(init);
+  const apiKey = getApiKey();
+  if (apiKey) {
+    headers.set("Authorization", `Bearer ${apiKey}`);
+  }
+  return headers;
+}
+
+export function getApiKey(): string {
+  if (typeof window === "undefined") return "";
+  return window.sessionStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+}
+
+export function setApiKey(apiKey: string) {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(API_KEY_STORAGE_KEY, apiKey.trim());
+}
+
+export function clearApiKey() {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(API_KEY_STORAGE_KEY);
+}
+
+export function isUnauthorizedError(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith("401:");
+}
+
+async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: authHeaders(init?.headers),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    let message: string;
+    try {
+      message = JSON.parse(body).error ?? body;
+    } catch {
+      message = body;
+    }
+    throw new Error(`${res.status}: ${message}`);
+  }
+  return res.json();
+}
 
 export async function fetchTasks(filters?: {
   agent?: string;
@@ -32,13 +79,11 @@ export async function fetchTasks(filters?: {
   if (filters?.project) params.set("project", filters.project);
   if (filters?.status) params.set("status", filters.status);
   const query = params.toString();
-  const res = await fetch(`${BASE}/tasks${query ? `?${query}` : ""}`);
-  return res.json();
+  return apiFetch<Task[]>(`${BASE}/tasks${query ? `?${query}` : ""}`);
 }
 
 export async function fetchFeed(limit = 50): Promise<FeedEntry[]> {
-  const res = await fetch(`${BASE}/feed?limit=${limit}`);
-  return res.json();
+  return apiFetch<FeedEntry[]>(`${BASE}/feed?limit=${limit}`);
 }
 
 export async function createTask(data: {
@@ -47,26 +92,37 @@ export async function createTask(data: {
   title: string;
   summary?: string;
 }): Promise<Task> {
-  const res = await fetch(`${BASE}/tasks`, {
+  return apiFetch<Task>(`${BASE}/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  return res.json();
 }
 
 export async function updateTask(
   id: number,
   data: { status?: string; summary?: string }
 ): Promise<Task> {
-  const res = await fetch(`${BASE}/tasks/${id}`, {
+  return apiFetch<Task>(`${BASE}/tasks/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  return res.json();
 }
 
 export async function deleteTask(id: number): Promise<void> {
-  await fetch(`${BASE}/tasks/${id}`, { method: "DELETE" });
+  const res = await fetch(`${BASE}/tasks/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    let message: string;
+    try {
+      message = JSON.parse(body).error ?? body;
+    } catch {
+      message = body;
+    }
+    throw new Error(`${res.status}: ${message}`);
+  }
 }

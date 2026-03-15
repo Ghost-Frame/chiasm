@@ -3,6 +3,8 @@ import Database from "libsql";
 export function initDb(dbPath: string): Database {
   const db = new Database(dbPath);
 
+  db.exec("PRAGMA foreign_keys = ON");
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

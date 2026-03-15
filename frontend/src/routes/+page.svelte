@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { fetchTasks, fetchFeed, updateTask, deleteTask } from "$lib/api";
+  import * as missionApi from "$lib/api";
   import type { Task, FeedEntry } from "$lib/api";
 
   let tasks = $state<Task[]>([]);
@@ -10,6 +10,12 @@
   let filterProject = $state("");
   let loading = $state(true);
   let clock = $state("");
+  let errorMsg = $state("");
+  let authRequired = $state(false);
+  let authKeyInput = $state("");
+  let authSubmitting = $state(false);
+  let allKnownAgents = $state<string[]>([]);
+  let allKnownProjects = $state<string[]>([]);
 
   // ---- NOTIFICATIONS ----
   interface Notification {
@@ -123,7 +129,7 @@
 
     const wasCompleted = status === "completed" && draggedTask.status !== "completed";
     const droppedId = draggedTask.id;
-    await updateTask(draggedTask.id, { status });
+    await missionApi.updateTask(draggedTask.id, { status });
     await loadData();
 
     if (wasCompleted) {
@@ -246,7 +252,12 @@
 
   function updateClock() {
     const now = new Date();
-    clock = now.toLocaleTimeString("en-US", { hour12: false }) + " UTC" + (now.getTimezoneOffset() > 0 ? "-" : "+") + Math.abs(now.getTimezoneOffset() / 60);
+    const offsetMin = -now.getTimezoneOffset();
+    const sign = offsetMin >= 0 ? "+" : "-";
+    const absH = Math.floor(Math.abs(offsetMin) / 60);
+    const absM = Math.abs(offsetMin) % 60;
+    const tz = absM > 0 ? `${absH}:${String(absM).padStart(2, "0")}` : String(absH);
+    clock = now.toLocaleTimeString("en-US", { hour12: false }) + " UTC" + sign + tz;
   }
 
   async function loadData() {
@@ -254,22 +265,63 @@
     if (filterAgent) filters.agent = filterAgent;
     if (filterProject) filters.project = filterProject;
 
-    const [t, f] = await Promise.all([fetchTasks(filters), fetchFeed()]);
+    try {
+      const [t, f] = await Promise.all([missionApi.fetchTasks(filters), missionApi.fetchFeed()]);
 
-    // Arrival notifications
-    if (!loading) {
-      for (const task of t) {
-        if (!knownTaskIds.has(task.id)) {
-          showNotification(task);
+      // Arrival notifications
+      if (!loading) {
+        for (const task of t) {
+          if (!knownTaskIds.has(task.id)) {
+            showNotification(task);
+          }
         }
       }
+      knownTaskIds = new Set(t.map(task => task.id));
+
+      tasks = t;
+      feed = f;
+      authRequired = false;
+      errorMsg = "";
+
+      // Accumulate all known agents/projects for filter dropdowns
+      const agents = new Set(allKnownAgents);
+      const projects = new Set(allKnownProjects);
+      for (const task of t) {
+        agents.add(task.agent);
+        projects.add(task.project);
+      }
+      allKnownAgents = [...agents].sort();
+      allKnownProjects = [...projects].sort();
+    } catch (err) {
+      if (missionApi.isUnauthorizedError(err)) {
+        authRequired = true;
+        errorMsg = "Mission Control API key required";
+        return;
+      }
+      errorMsg = err instanceof Error ? err.message : "Failed to load data";
+    } finally {
+      loading = false;
     }
-    knownTaskIds = new Set(t.map(task => task.id));
+  }
 
-    tasks = t;
-    feed = f;
-    loading = false;
+  async function submitApiKey() {
+    authSubmitting = true;
+    try {
+      missionApi.setApiKey(authKeyInput);
+      loading = true;
+      await loadData();
+      if (!authRequired) {
+        authKeyInput = "";
+      }
+    } finally {
+      authSubmitting = false;
+    }
+  }
 
+  function lockDashboard() {
+    missionApi.clearApiKey();
+    authRequired = true;
+    errorMsg = "Mission Control API key required";
   }
 
   async function cycleStatus(task: Task, e?: MouseEvent) {
@@ -277,18 +329,26 @@
     const nextStatus = cycle[(cycle.indexOf(task.status) + 1) % cycle.length];
     const wasCompleted = nextStatus === "completed";
 
-    await updateTask(task.id, { status: nextStatus });
-    await loadData();
+    try {
+      await missionApi.updateTask(task.id, { status: nextStatus });
+      await loadData();
 
-    if (wasCompleted && e) {
-      const card = (e.target as HTMLElement).closest(".card") as HTMLElement;
-      if (card) spawnConfetti(card);
+      if (wasCompleted && e) {
+        const card = (e.target as HTMLElement).closest(".card") as HTMLElement;
+        if (card) spawnConfetti(card);
+      }
+    } catch (err) {
+      errorMsg = err instanceof Error ? err.message : "Failed to update task";
     }
   }
 
   async function removeTask(id: number) {
-    await deleteTask(id);
-    await loadData();
+    try {
+      await missionApi.deleteTask(id);
+      await loadData();
+    } catch (err) {
+      errorMsg = err instanceof Error ? err.message : "Failed to delete task";
+    }
   }
 
   function tasksByStatus(status: string): Task[] {
@@ -317,6 +377,7 @@
     }
 
     window.addEventListener("mousemove", onMouseMove);
+    authKeyInput = missionApi.getApiKey();
     loadData();
     updateClock();
     const dataInterval = setInterval(loadData, 15000);
@@ -330,8 +391,8 @@
 </script>
 
 <!-- Notifications -->
-{#each notifications as notif (notif.id)}
-  <div class="notification" class:visible={notif.visible}>
+{#each notifications as notif, i (notif.id)}
+  <div class="notification" class:visible={notif.visible} style="top: {1.5 + i * 3.5}rem">
     <div class="notif-flash"></div>
     <div class="notif-content">
       <span class="notif-label">INCOMING</span>
@@ -355,6 +416,10 @@
           <span class="meta-item clock">{clock}</span>
           <span class="meta-sep">//</span>
           <button class="wallpaper-btn" onclick={randomWallpaper} title="Shuffle wallpaper">SHUFFLE BG</button>
+          {#if authRequired || missionApi.getApiKey()}
+            <span class="meta-sep">//</span>
+            <button class="wallpaper-btn" onclick={lockDashboard} title="Clear API key">LOCK</button>
+          {/if}
         </div>
       </div>
     </div>
@@ -376,13 +441,13 @@
     <div class="filters">
       <select bind:value={filterAgent} onchange={loadData}>
         <option value="">ALL AGENTS</option>
-        {#each uniqueAgents() as agent}
+        {#each allKnownAgents as agent}
           <option value={agent}>{agent.toUpperCase()}</option>
         {/each}
       </select>
       <select bind:value={filterProject} onchange={loadData}>
         <option value="">ALL PROJECTS</option>
-        {#each uniqueProjects() as project}
+        {#each allKnownProjects as project}
           <option value={project}>{project.toUpperCase()}</option>
         {/each}
       </select>
@@ -396,6 +461,34 @@
       </button>
     </div>
   </div>
+
+  {#if errorMsg}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="error-banner" onclick={() => errorMsg = ""}>
+      <span class="error-icon">&#9888;</span> {errorMsg}
+      <span class="error-dismiss">&times;</span>
+    </div>
+  {/if}
+
+  {#if authRequired}
+    <div class="auth-overlay">
+      <form class="auth-panel" onsubmit={(e) => { e.preventDefault(); submitApiKey(); }}>
+        <div class="auth-kicker">RESTRICTED</div>
+        <h2>Mission Control API Key Required</h2>
+        <p>Enter the server API key to unlock task and feed data.</p>
+        <input
+          type="password"
+          bind:value={authKeyInput}
+          placeholder="API key"
+          autocomplete="current-password"
+          disabled={authSubmitting}
+        />
+        <button type="submit" disabled={authSubmitting || !authKeyInput.trim()}>
+          {authSubmitting ? "VERIFYING..." : "UNLOCK"}
+        </button>
+      </form>
+    </div>
+  {/if}
 
   {#if loading}
     <div class="loading">ESTABLISHING UPLINK...</div>
@@ -518,7 +611,6 @@
   /* ---- NOTIFICATIONS ---- */
   .notification {
     position: fixed;
-    top: 1.5rem;
     right: -400px;
     z-index: 10000;
     background: rgba(12, 11, 10, 0.85);
@@ -1054,6 +1146,28 @@
     font-size: 1rem;
     animation: flicker 3s infinite;
   }
+
+  /* ---- ERROR BANNER ---- */
+  .error-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    margin-bottom: 1rem;
+    background: rgba(192, 66, 42, 0.15);
+    border: 1px solid rgba(192, 66, 42, 0.4);
+    border-radius: 6px;
+    color: #e05040;
+    font-size: 0.72rem;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+
+  .error-banner:hover { background: rgba(192, 66, 42, 0.25); }
+  .error-icon { font-size: 1rem; }
+  .error-dismiss { margin-left: auto; font-size: 1rem; opacity: 0.6; }
+  .error-dismiss:hover { opacity: 1; }
 
   /* ---- RESPONSIVE ---- */
   @media (max-width: 1000px) {

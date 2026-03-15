@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "description": "Multi-agent task coordination dashboard",
   "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
     "dev": "node --experimental-strip-types src/server.ts",
+    "build": "npm run build:frontend",
     "build:frontend": "cd frontend && npm run build",
     "start": "node --experimental-strip-types src/server.ts"
   },
