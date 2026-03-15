@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.db
+*.db-journal
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
