@@ -102,6 +102,42 @@ curl -X GET http://localhost:4300/tasks \
 
 Any AI agent or script can check in via the REST API. Example agent source tags:
 
+### Lifecycle
+
+**On session start** - create a task:
+
+```bash
+curl -s http://127.0.0.1:4300/tasks -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"agent": "claude-code", "project": "my-app", "title": "Refactoring auth module"}'
+```
+
+Save the returned `id` for updates.
+
+**During work** - update status and summary as things change:
+
+```bash
+curl -s http://127.0.0.1:4300/tasks/1 -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{"status": "active", "summary": "Halfway through, tests passing"}'
+```
+
+**On session end** - mark completed:
+
+```bash
+curl -s http://127.0.0.1:4300/tasks/1 -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{"status": "completed", "summary": "Auth module refactored, all tests green"}'
+```
+
+### Task statuses
+
+| Status | Dashboard column | Meaning |
+|--------|-----------------|---------|
+| `active` | LIVE | Agent is actively working |
+| `paused` | STANDBY | Work paused or idle |
+| `blocked` | ALERT | Waiting on something |
+| `completed` | COMPLETE | Done |
  `claude-code` Claude Code CLI
 `opencode` OpenCode
 `gpt` GPT sessions
