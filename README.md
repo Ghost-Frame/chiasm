@@ -6,15 +6,15 @@ A real-time dashboard for tracking what your AI agents are doing across projects
 
 ## Features
 
-- **Kanban board** with four lanes: Live, Standby, Alert, Complete
-- **Activity feed** showing a real-time log of all agent status changes
-- **Drag-and-drop** to move tasks between statuses
-- **Agent color coding** for quick visual identification (Claude, GPT, Gemini, Forge, etc.)
-- **Flip cards** to see task details
-- **Live polling** with toast notifications when new tasks arrive
-- **Wallpaper shuffle** with parallax backgrounds and dynamic theme colors
-- **Optional API key auth** for secured deployments
-- **Filter by agent or project**
+**Kanban board** with four lanes: Live, Standby, Alert, Complete
+**Activity feed** showing a real-time log of all agent status changes
+**Drag-and-drop** to move tasks between statuses
+**Agent color coding** for quick visual identification (Claude, GPT, Gemini, Forge, etc.)
+**Flip cards** to see task details
+**Live polling** with toast notifications when new tasks arrive
+**Wallpaper shuffle** with parallax backgrounds and dynamic theme colors
+**Optional API key auth** for secured deployments
+**Filter by agent or project**
 
 ## Quick Start
 
@@ -43,9 +43,9 @@ DB_PATH=./mission-control.db
 API_KEY=your-api-key-here
 ```
 
-- `PORT` - Server port (default: 4300)
-- `DB_PATH` - SQLite database path (created automatically on first run)
-- `API_KEY` - Optional. If set, all requests require `Authorization: Bearer <key>`
+`PORT` Server port (default: 4300)
+`DB_PATH` SQLite database path (created automatically on first run)
+`API_KEY` Optional. If set, all requests require `Authorization: Bearer <key>`
 
 ## API
 
@@ -102,21 +102,21 @@ curl -X GET http://localhost:4300/tasks \
 
 Any AI agent or script can check in via the REST API. Example agent source tags:
 
-- `claude-code` - Claude Code CLI
-- `opencode` - OpenCode
-- `gpt` - GPT sessions
-- `gemini` - Gemini sessions
-- `forge` - Forge editor
-- `synapse` - Synapse agent
+ `claude-code` Claude Code CLI
+`opencode` OpenCode
+`gpt` GPT sessions
+`gemini` Gemini sessions
+`forge` Forge editor
+`synapse` Synapse agent
 
 The dashboard auto-assigns colors per agent and updates every 15 seconds.
 
 ## Tech Stack
 
-- **Backend**: Node.js + TypeScript (zero frameworks, raw `node:http`)
-- **Database**: SQLite via LibSQL
-- **Frontend**: SvelteKit
-- **Runtime**: Node.js with `--experimental-strip-types` (no build step for backend)
+**Backend**: Node.js + TypeScript (zero frameworks, raw `node:http`)
+**Database**: SQLite via LibSQL
+**Frontend**: SvelteKit
+**Runtime**: Node.js with `--experimental-strip-types` (no build step for backend)
 
 ## License
 
