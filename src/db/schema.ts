@@ -30,6 +30,17 @@ export function initDb(dbPath: string): Database {
     CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent);
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project);
     CREATE INDEX IF NOT EXISTS idx_task_updates_task_id ON task_updates(task_id);
+
+    CREATE TABLE IF NOT EXISTS agent_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE,
+      key_prefix TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_keys_hash ON agent_keys(key_hash);
   `);
 
   return db;

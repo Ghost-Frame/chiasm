@@ -1,6 +1,7 @@
 import type DatabaseConstructor from "libsql";
 type Database = InstanceType<typeof DatabaseConstructor>;
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { AuthIdentity } from "../types.ts";
 import {
   listTasks,
   createTask,
@@ -108,16 +109,24 @@ function requestErrorStatus(err: unknown): number {
   return err instanceof Error && err.message === "Request body too large" ? 413 : 400;
 }
 
+/** Check if identity is allowed to act on a task owned by the given agent. */
+function canActOnAgent(identity: AuthIdentity, taskAgent: string): boolean {
+  if (identity.role === "admin") return true;
+  return identity.agent === taskAgent;
+}
+
 export function handleTaskRoutes(
   db: Database,
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
-  options: RouteOptions = DEFAULT_ROUTE_OPTIONS
+  options: RouteOptions = DEFAULT_ROUTE_OPTIONS,
+  identity?: AuthIdentity,
 ) {
   const url = new URL(req.url!, `http://${req.headers.host}`);
+  const auth: AuthIdentity = identity ?? { role: "admin", agent: null };
 
-  // GET /tasks - list tasks with optional filters
+  // GET /tasks - list tasks (all agents can read all tasks)
   if (pathname === "/tasks" && req.method === "GET") {
     const filters = {
       agent: url.searchParams.get("agent") ?? undefined,
@@ -129,7 +138,7 @@ export function handleTaskRoutes(
     return json(res, listTasks(db, filters));
   }
 
-  // POST /tasks - create a new task
+  // POST /tasks - create a new task (agent key can only create for itself)
   if (pathname === "/tasks" && req.method === "POST") {
     return readBody(req, options.bodyMaxBytes).then((body) => {
       const { agent, project, title, summary } = body as {
@@ -149,12 +158,17 @@ export function handleTaskRoutes(
         return error(res, "summary must be a string");
       }
 
+      // Agent enforcement: can only create tasks for yourself
+      if (!canActOnAgent(auth, agent)) {
+        return error(res, `Agent key for "${auth.agent}" cannot create tasks for "${agent}"`, 403);
+      }
+
       const task = createTask(db, { agent, project, title, summary });
       return json(res, task, 201);
     }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
   }
 
-  // GET /tasks/:id - get a single task
+  // GET /tasks/:id - get a single task (all agents can read)
   const taskMatch = pathname.match(/^\/tasks\/(\d+)$/);
   if (taskMatch && req.method === "GET") {
     const task = getTask(db, parseInt(taskMatch[1], 10));
@@ -162,9 +176,18 @@ export function handleTaskRoutes(
     return json(res, task);
   }
 
-  // PATCH /tasks/:id - update a task
+  // PATCH /tasks/:id - update a task (agent can only update own tasks)
   if (taskMatch && req.method === "PATCH") {
     return readBody(req, options.bodyMaxBytes).then((body) => {
+      const taskId = parseInt(taskMatch[1], 10);
+      const existing = getTask(db, taskId);
+      if (!existing) return error(res, "Task not found", 404);
+
+      // Agent enforcement: can only update your own tasks
+      if (!canActOnAgent(auth, existing.agent)) {
+        return error(res, `Agent key for "${auth.agent}" cannot update tasks owned by "${existing.agent}"`, 403);
+      }
+
       const bodyData = body as { status?: unknown; summary?: unknown; agent?: unknown };
       if (bodyData.agent !== undefined) {
         return error(res, "agent cannot be updated", 400);
@@ -181,20 +204,28 @@ export function handleTaskRoutes(
         return error(res, `Invalid status. Must be one of: ${[...VALID_STATUSES].join(", ")}`);
       }
 
-      const task = updateTask(db, parseInt(taskMatch[1], 10), bodyData as { status?: string; summary?: string });
+      const task = updateTask(db, taskId, bodyData as { status?: string; summary?: string });
       if (!task) return error(res, "Task not found", 404);
       return json(res, task);
     }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
   }
 
-  // DELETE /tasks/:id - delete a task
+  // DELETE /tasks/:id - delete a task (agent can only delete own tasks)
   if (taskMatch && req.method === "DELETE") {
-    const deleted = deleteTask(db, parseInt(taskMatch[1], 10));
+    const taskId = parseInt(taskMatch[1], 10);
+    const existing = getTask(db, taskId);
+    if (!existing) return error(res, "Task not found", 404);
+
+    if (!canActOnAgent(auth, existing.agent)) {
+      return error(res, `Agent key for "${auth.agent}" cannot delete tasks owned by "${existing.agent}"`, 403);
+    }
+
+    const deleted = deleteTask(db, taskId);
     if (!deleted) return error(res, "Task not found", 404);
     return json(res, { ok: true });
   }
 
-  // GET /feed - activity feed
+  // GET /feed - activity feed (all agents can read)
   if (pathname === "/feed" && req.method === "GET") {
     const limit = parseBoundedInt(url.searchParams.get("limit"), options.feedDefaultLimit, 1, options.feedMaxLimit);
     const offset = parseBoundedInt(url.searchParams.get("offset"), 0, 0, Number.MAX_SAFE_INTEGER);

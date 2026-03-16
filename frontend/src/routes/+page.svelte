@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import * as missionApi from "$lib/api";
+  import * as api from "$lib/api";
   import type { Task, FeedEntry } from "$lib/api";
 
   let tasks = $state<Task[]>([]);
@@ -129,7 +129,7 @@
 
     const wasCompleted = status === "completed" && draggedTask.status !== "completed";
     const droppedId = draggedTask.id;
-    await missionApi.updateTask(draggedTask.id, { status });
+    await api.updateTask(draggedTask.id, { status });
     await loadData();
 
     if (wasCompleted) {
@@ -266,7 +266,7 @@
     if (filterProject) filters.project = filterProject;
 
     try {
-      const [t, f] = await Promise.all([missionApi.fetchTasks(filters), missionApi.fetchFeed()]);
+      const [t, f] = await Promise.all([api.fetchTasks(filters), api.fetchFeed()]);
 
       // Arrival notifications
       if (!loading) {
@@ -293,9 +293,9 @@
       allKnownAgents = [...agents].sort();
       allKnownProjects = [...projects].sort();
     } catch (err) {
-      if (missionApi.isUnauthorizedError(err)) {
+      if (api.isUnauthorizedError(err)) {
         authRequired = true;
-        errorMsg = "Mission Control API key required";
+        errorMsg = "Chiasm API key required";
         return;
       }
       errorMsg = err instanceof Error ? err.message : "Failed to load data";
@@ -307,7 +307,7 @@
   async function submitApiKey() {
     authSubmitting = true;
     try {
-      missionApi.setApiKey(authKeyInput);
+      api.setApiKey(authKeyInput);
       loading = true;
       await loadData();
       if (!authRequired) {
@@ -319,9 +319,9 @@
   }
 
   function lockDashboard() {
-    missionApi.clearApiKey();
+    api.clearApiKey();
     authRequired = true;
-    errorMsg = "Mission Control API key required";
+    errorMsg = "Chiasm API key required";
   }
 
   async function cycleStatus(task: Task, e?: MouseEvent) {
@@ -330,7 +330,7 @@
     const wasCompleted = nextStatus === "completed";
 
     try {
-      await missionApi.updateTask(task.id, { status: nextStatus });
+      await api.updateTask(task.id, { status: nextStatus });
       await loadData();
 
       if (wasCompleted && e) {
@@ -344,7 +344,7 @@
 
   async function removeTask(id: number) {
     try {
-      await missionApi.deleteTask(id);
+      await api.deleteTask(id);
       await loadData();
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : "Failed to delete task";
@@ -377,7 +377,7 @@
     }
 
     window.addEventListener("mousemove", onMouseMove);
-    authKeyInput = missionApi.getApiKey();
+    authKeyInput = api.getApiKey();
     loadData();
     updateClock();
     const dataInterval = setInterval(loadData, 15000);
@@ -407,7 +407,7 @@
     <div class="header-left">
       <div class="logo-mark">&#9670;</div>
       <div class="header-text">
-        <h1>MISSION CONTROL</h1>
+        <h1>CHIASM</h1>
         <div class="header-meta">
           <span class="meta-item">SYS:ONLINE</span>
           <span class="meta-sep">//</span>
@@ -416,7 +416,7 @@
           <span class="meta-item clock">{clock}</span>
           <span class="meta-sep">//</span>
           <button class="wallpaper-btn" onclick={randomWallpaper} title="Shuffle wallpaper">SHUFFLE BG</button>
-          {#if authRequired || missionApi.getApiKey()}
+          {#if authRequired || api.getApiKey()}
             <span class="meta-sep">//</span>
             <button class="wallpaper-btn" onclick={lockDashboard} title="Clear API key">LOCK</button>
           {/if}
@@ -474,7 +474,7 @@
     <div class="auth-overlay">
       <form class="auth-panel" onsubmit={(e) => { e.preventDefault(); submitApiKey(); }}>
         <div class="auth-kicker">RESTRICTED</div>
-        <h2>Mission Control API Key Required</h2>
+        <h2>Chiasm API Key Required</h2>
         <p>Enter the server API key to unlock task and feed data.</p>
         <input
           type="password"

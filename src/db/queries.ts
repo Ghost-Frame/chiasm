@@ -12,6 +12,16 @@ export interface Task {
   updated_at: string;
 }
 
+export interface AgentKey {
+  id: number;
+  agent: string;
+  key_hash: string;
+  key_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked: number;
+}
+
 export interface TaskUpdate {
   id: number;
   task_id: number;
@@ -120,6 +130,42 @@ export function getFeed(
     ORDER BY tu.created_at DESC, tu.id DESC
     LIMIT ? OFFSET ?
   `).all(limit, offset) as (TaskUpdate & { project: string; title: string })[];
+}
+
+// ============================================================================
+// AGENT KEY MANAGEMENT
+// ============================================================================
+
+export function lookupAgentKey(db: Database, keyHash: string): AgentKey | undefined {
+  const key = db.prepare(
+    "SELECT * FROM agent_keys WHERE key_hash = ? AND revoked = 0"
+  ).get(keyHash) as AgentKey | undefined;
+  if (key) {
+    db.prepare("UPDATE agent_keys SET last_used_at = datetime('now') WHERE id = ?").run(key.id);
+  }
+  return key;
+}
+
+export function createAgentKey(
+  db: Database,
+  agent: string,
+  keyHash: string,
+  keyPrefix: string,
+): AgentKey {
+  return db.prepare(
+    "INSERT INTO agent_keys (agent, key_hash, key_prefix) VALUES (?, ?, ?) RETURNING *"
+  ).get(agent, keyHash, keyPrefix) as AgentKey;
+}
+
+export function listAgentKeys(db: Database): Omit<AgentKey, "key_hash">[] {
+  return db.prepare(
+    "SELECT id, agent, key_prefix, created_at, last_used_at, revoked FROM agent_keys ORDER BY created_at DESC"
+  ).all() as Omit<AgentKey, "key_hash">[];
+}
+
+export function revokeAgentKey(db: Database, id: number): boolean {
+  const result = db.prepare("UPDATE agent_keys SET revoked = 1 WHERE id = ?").run(id);
+  return result.changes > 0;
 }
 
 export function pruneTaskUpdates(db: Database, maxRows: number, maxAgeDays: number) {

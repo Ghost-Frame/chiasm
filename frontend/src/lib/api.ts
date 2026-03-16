@@ -21,7 +21,7 @@ export interface FeedEntry {
 }
 
 const BASE = "";
-const API_KEY_STORAGE_KEY = "mission-control-api-key";
+const API_KEY_STORAGE_KEY = "chiasm-api-key";
 
 function authHeaders(init?: HeadersInit): HeadersInit {
   const headers = new Headers(init);

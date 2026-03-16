@@ -1,7 +1,7 @@
 {
-  "name": "mission-control",
+  "name": "chiasm",
   "version": "0.1.0",
-  "description": "Multi-agent task coordination dashboard",
+  "description": "Multi-agent task coordination",
   "type": "module",
   "engines": {
     "node": ">=22.6.0"
