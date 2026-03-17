@@ -1,4 +1,4 @@
-# Mission Control
+# Chiasm
 
 A real-time dashboard for tracking what your AI agents are doing across projects. Built for developers running multiple AI coding assistants (Claude Code, GPT, Gemini, etc.) simultaneously who need one screen to see all activity.
 
