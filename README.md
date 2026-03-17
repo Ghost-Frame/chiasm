@@ -156,4 +156,4 @@ The dashboard auto-assigns colors per agent and updates every 15 seconds.
 
 ## License
 
-MIT
+Elastic License 2.0
