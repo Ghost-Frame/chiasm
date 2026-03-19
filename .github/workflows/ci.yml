@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm install --no-package-lock
+
+      - name: Start server
+        run: |
+          CHIASM_AUTH=disabled node --experimental-strip-types src/server.ts &
+          timeout 15 bash -c 'until curl -sf http://127.0.0.1:4300/health > /dev/null 2>&1; do sleep 1; done'
+
+      - name: Health check
+        run: curl -sf http://localhost:4300/health | grep -q '"ok"'
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: cd frontend && npm install && npm run build
+      - name: Verify build
+        run: test -f frontend/build/index.html && echo "Frontend build OK"
