@@ -13,7 +13,7 @@ A real-time dashboard for tracking what your AI agents are doing across projects
 **Flip cards** to see task details
 **Live polling** with toast notifications when new tasks arrive
 **Wallpaper shuffle** with parallax backgrounds and dynamic theme colors
-**Optional API key auth** for secured deployments
+**Auth with per-agent keys** and admin escalation for secured deployments
 **Filter by agent or project**
 
 ## Quick Start
@@ -39,93 +39,123 @@ Copy `.env.example` to `.env` and edit as needed:
 
 ```
 PORT=4300
-DB_PATH=./mission-control.db
-API_KEY=your-api-key-here
+HOST=0.0.0.0
+DB_PATH=./chiasm.db
+CHIASM_API_KEY=your-admin-key-here
 ```
 
-`PORT` Server port (default: 4300)
-`DB_PATH` SQLite database path (created automatically on first run)
-`API_KEY` Optional. If set, all requests require `Authorization: Bearer <key>`
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Server port | `4300` |
+| `HOST` | Bind address | `0.0.0.0` |
+| `DB_PATH` | SQLite database path (created automatically) | `./chiasm.db` |
+| `CHIASM_API_KEY` | **Required.** Admin API key for full access | - |
+| `CHIASM_AUTH` | Set to `disabled` to explicitly run without auth | - |
+| `CORS_ALLOW_ORIGIN` | Allowed CORS origin (`*` or specific origin) | disabled |
 
-## API
+The server **refuses to start** unless `CHIASM_API_KEY` is set or `CHIASM_AUTH=disabled` is explicitly configured. This prevents accidentally running with auth off.
 
-All endpoints accept and return JSON.
+## Authentication
 
-### Tasks
+Chiasm uses a two-tier auth model:
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/tasks` | List tasks (optional query params: `agent`, `project`, `status`) |
-| `POST` | `/tasks` | Create a task |
-| `GET` | `/tasks/:id` | Get a single task |
-| `PATCH` | `/tasks/:id` | Update a task |
-| `DELETE` | `/tasks/:id` | Delete a task |
+### Admin key
 
-### Feed
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/feed?limit=50` | Activity log of all status changes |
-
-### Health
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
-
-### Examples
-
-Create a task:
-
-```bash
-curl -X POST http://localhost:4300/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"agent": "claude-code", "project": "my-app", "title": "Refactoring auth module"}'
-```
-
-Update status:
-
-```bash
-curl -X PATCH http://localhost:4300/tasks/1 \
-  -H "Content-Type: application/json" \
-  -d '{"status": "completed", "summary": "Done, all tests passing"}'
-```
-
-With auth enabled:
+Set via `CHIASM_API_KEY`. Grants full access to all endpoints including `/admin/*`.
 
 ```bash
 curl -X GET http://localhost:4300/tasks \
-  -H "Authorization: Bearer your-api-key-here"
+  -H "Authorization: Bearer your-admin-key-here"
 ```
+
+### Per-agent keys
+
+Created via the admin API. Each key is scoped to a specific agent and can only create/update/delete tasks owned by that agent. All agents can read all tasks and the feed.
+
+```bash
+# Create an agent key (admin only)
+curl -X POST http://localhost:4300/admin/keys \
+  -H "Authorization: Bearer your-admin-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{"agent": "claude-code"}'
+
+# Response includes the key (store it, it cannot be retrieved again)
+# {"id":1,"agent":"claude-code","key":"mc_...","prefix":"mc_da2bffc0","warning":"..."}
+
+# List agent keys (admin only, no secrets shown)
+curl -X GET http://localhost:4300/admin/keys \
+  -H "Authorization: Bearer your-admin-key-here"
+
+# Revoke an agent key (admin only)
+curl -X DELETE http://localhost:4300/admin/keys/1 \
+  -H "Authorization: Bearer your-admin-key-here"
+```
+
+## API
+
+All endpoints accept and return JSON. All endpoints except `/health` require authentication.
+
+### Tasks
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/tasks` | any key | List tasks (query: `agent`, `project`, `status`, `limit`, `offset`) |
+| `POST` | `/tasks` | agent's own or admin | Create a task |
+| `GET` | `/tasks/:id` | any key | Get a single task |
+| `PATCH` | `/tasks/:id` | agent's own or admin | Update a task |
+| `DELETE` | `/tasks/:id` | agent's own or admin | Delete a task |
+
+### Feed
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/feed?limit=50` | any key | Activity log of all status changes |
+
+### Admin
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/admin/keys` | admin only | Create an agent key |
+| `GET` | `/admin/keys` | admin only | List agent keys (no secrets) |
+| `DELETE` | `/admin/keys/:id` | admin only | Revoke an agent key |
+
+### Health
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/health` | none | Health check (always open) |
 
 ## Agent Integration
 
-Any AI agent or script can check in via the REST API. Example agent source tags:
+Any AI agent or script can check in via the REST API.
 
 ### Lifecycle
 
-**On session start** - create a task:
+**On session start** -- create a task:
 
 ```bash
-curl -s http://127.0.0.1:4300/tasks -X POST \
+curl -s http://localhost:4300/tasks -X POST \
+  -H "Authorization: Bearer $AGENT_KEY" \
   -H "Content-Type: application/json" \
   -d '{"agent": "claude-code", "project": "my-app", "title": "Refactoring auth module"}'
 ```
 
 Save the returned `id` for updates.
 
-**During work** - update status and summary as things change:
+**During work** -- update status and summary:
 
 ```bash
-curl -s http://127.0.0.1:4300/tasks/1 -X PATCH \
+curl -s http://localhost:4300/tasks/1 -X PATCH \
+  -H "Authorization: Bearer $AGENT_KEY" \
   -H "Content-Type: application/json" \
   -d '{"status": "active", "summary": "Halfway through, tests passing"}'
 ```
 
-**On session end** - mark completed:
+**On session end** -- mark completed:
 
 ```bash
-curl -s http://127.0.0.1:4300/tasks/1 -X PATCH \
+curl -s http://localhost:4300/tasks/1 -X PATCH \
+  -H "Authorization: Bearer $AGENT_KEY" \
   -H "Content-Type: application/json" \
   -d '{"status": "completed", "summary": "Auth module refactored, all tests green"}'
 ```
@@ -138,12 +168,17 @@ curl -s http://127.0.0.1:4300/tasks/1 -X PATCH \
 | `paused` | STANDBY | Work paused or idle |
 | `blocked` | ALERT | Waiting on something |
 | `completed` | COMPLETE | Done |
- `claude-code` Claude Code CLI
-`opencode` OpenCode
-`gpt` GPT sessions
-`gemini` Gemini sessions
-`forge` Forge editor
-`synapse` Synapse agent
+
+### Agent source tags
+
+| Agent | Tag |
+|-------|-----|
+| Claude Code CLI | `claude-code` |
+| OpenCode | `opencode` |
+| GPT | `gpt` |
+| Gemini | `gemini` |
+| Forge | `forge` |
+| Synapse | `synapse` |
 
 The dashboard auto-assigns colors per agent and updates every 15 seconds.
 
@@ -156,4 +191,4 @@ The dashboard auto-assigns colors per agent and updates every 15 seconds.
 
 ## License
 
-MIT
+Elastic License 2.0 -- see [LICENSE](LICENSE).

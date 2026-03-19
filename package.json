@@ -1,6 +1,6 @@
 {
   "name": "chiasm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Multi-agent task coordination",
   "type": "module",
   "engines": {
@@ -10,7 +10,8 @@
     "dev": "node --experimental-strip-types src/server.ts",
     "build": "npm run build:frontend",
     "build:frontend": "cd frontend && npm run build",
-    "start": "node --experimental-strip-types src/server.ts"
+    "start": "node --experimental-strip-types src/server.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
     "libsql": "^0.5.0"

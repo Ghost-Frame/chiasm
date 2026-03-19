@@ -9,8 +9,20 @@ import { pruneTaskUpdates, lookupAgentKey, createAgentKey, listAgentKeys, revoke
 import { handleTaskRoutes } from "./routes/tasks.ts";
 
 const DB_PATH = process.env.DB_PATH ?? "./chiasm.db";
-const ADMIN_KEY = process.env.CHIASM_API_KEY ?? process.env.API_KEY;
+const ADMIN_KEY = process.env.CHIASM_API_KEY;
+const AUTH_DISABLED = process.env.CHIASM_AUTH === "disabled";
+const HOST = process.env.HOST ?? "0.0.0.0";
 const CORS_ALLOW_ORIGIN = process.env.CORS_ALLOW_ORIGIN;
+
+// ---------------------------------------------------------------------------
+// Startup self-check: fail closed if auth is not explicitly configured
+// ---------------------------------------------------------------------------
+if (!ADMIN_KEY && !AUTH_DISABLED) {
+  console.error("FATAL: CHIASM_API_KEY is not set.");
+  console.error("  Set CHIASM_API_KEY to enable auth (recommended), or");
+  console.error("  set CHIASM_AUTH=disabled to explicitly run without auth.");
+  process.exit(1);
+}
 
 function envInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -61,8 +73,8 @@ function hashKey(key: string): string {
 }
 
 function resolveAuth(authHeader: string | undefined): AuthIdentity | null {
-  // No auth configured = open access
-  if (!ADMIN_KEY) return { role: "admin", agent: null };
+  // Explicit opt-in to no-auth mode
+  if (AUTH_DISABLED) return { role: "admin", agent: null };
 
   if (!authHeader?.startsWith("Bearer ")) return null;
   const token = authHeader.slice(7);
@@ -272,10 +284,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Chiasm running on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Chiasm running on http://${HOST}:${PORT}`);
   console.log(`Database: ${DB_PATH}`);
-  console.log(`Auth: ${ADMIN_KEY ? "enabled (admin + per-agent keys)" : "disabled (set CHIASM_API_KEY to enable)"}`);
+  console.log(`Auth: ${AUTH_DISABLED ? "DISABLED (CHIASM_AUTH=disabled)" : "enabled (admin + per-agent keys)"}`);
   console.log(`CORS: ${CORS_ALLOW_ORIGIN ?? "disabled (same-origin only)"}`);
   console.log(`Frontend: ${HAS_FRONTEND_BUILD ? `serving ${FRONTEND_BUILD_DIR}` : "build not found"}`);
 });
