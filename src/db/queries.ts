@@ -1,6 +1,7 @@
 import type DatabaseConstructor from "libsql";
 type Database = InstanceType<typeof DatabaseConstructor>;
 import { startSpan, SpanStatusCode } from "../tracing.ts";
+import { emitEvent } from "../axon.ts";
 
 export interface Task {
   id: number;
@@ -105,6 +106,7 @@ export function createTask(
     const result = run();
     span.setStatus({ code: SpanStatusCode.OK });
     span.end();
+    emitEvent("tasks", "task.created", { agent: result.agent, project: result.project, title: result.title, task_id: result.id });
     return result;
   } catch (e: any) {
     span.setStatus({ code: SpanStatusCode.ERROR, message: e.message });
@@ -146,6 +148,8 @@ export function updateTask(
     const result = run();
     span.setStatus({ code: SpanStatusCode.OK });
     span.end();
+    const eventType = result.status === "completed" ? "task.completed" : "task.updated";
+    emitEvent("tasks", eventType, { agent: result.agent, project: result.project, title: result.title, task_id: result.id, status: result.status, summary: result.summary ?? undefined });
     return result;
   } catch (e: any) {
     span.setStatus({ code: SpanStatusCode.ERROR, message: e.message });
@@ -170,6 +174,8 @@ export function submitOutput(db: Database, id: number, output: string): Task | u
   db.prepare(
     "INSERT INTO task_updates (task_id, agent, status, summary) VALUES (?, ?, ?, 'Output submitted')"
   ).run(id, existing.agent, existing.status);
+
+  emitEvent("tasks", "task.output", { agent: existing.agent, project: existing.project, title: existing.title, task_id: id });
 
   if (existing.guardrail_url) {
     runGuardrail(db, result);
@@ -203,6 +209,7 @@ function runGuardrail(db: Database, task: Task) {
         db.prepare(
           "INSERT INTO task_updates (task_id, agent, status, summary) VALUES (?, ?, 'completed', 'Guardrail passed')"
         ).run(task.id, task.agent);
+        emitEvent("tasks", "task.completed", { agent: task.agent, project: task.project, title: task.title, task_id: task.id });
       } else {
         const fb = data.feedback ?? "Guardrail rejected output";
         db.prepare(
@@ -231,6 +238,8 @@ export function submitFeedback(db: Database, id: number, feedback: string): Task
   db.prepare(
     "INSERT INTO task_updates (task_id, agent, status, summary) VALUES (?, ?, 'active', ?)"
   ).run(id, existing.agent, `Human feedback: ${feedback.slice(0, 100)}`);
+
+  emitEvent("tasks", "task.feedback", { agent: existing.agent, project: existing.project, title: existing.title, task_id: id, feedback });
 
   return result;
 }
