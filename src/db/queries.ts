@@ -1,5 +1,6 @@
 import type DatabaseConstructor from "libsql";
 type Database = InstanceType<typeof DatabaseConstructor>;
+import { startSpan, SpanStatusCode } from "../tracing.ts";
 
 export interface Task {
   id: number;
@@ -70,6 +71,7 @@ export function createTask(
   db: Database,
   data: { agent: string; project: string; title: string; summary?: string }
 ): Task {
+  const span = startSpan("chiasm.createTask", { "task.agent": data.agent, "task.project": data.project });
   const run = db.transaction(() => {
     const result = db.prepare(
       "INSERT INTO tasks (agent, project, title, summary) VALUES (?, ?, ?, ?) RETURNING *"
@@ -80,10 +82,21 @@ export function createTask(
       "INSERT INTO task_updates (task_id, agent, status, summary) VALUES (?, ?, 'active', ?)"
     ).run(result.id, data.agent, data.summary ?? null);
 
+    span.setAttribute("task.id", result.id);
     return result;
   });
 
-  return run();
+  try {
+    const result = run();
+    span.setStatus({ code: SpanStatusCode.OK });
+    span.end();
+    return result;
+  } catch (e: any) {
+    span.setStatus({ code: SpanStatusCode.ERROR, message: e.message });
+    span.recordException(e);
+    span.end();
+    throw e;
+  }
 }
 
 export function updateTask(
@@ -96,6 +109,7 @@ export function updateTask(
 
   const status = data.status ?? existing.status;
   const summary = data.summary ?? existing.summary;
+  const span = startSpan("chiasm.updateTask", { "task.id": id, "task.agent": existing.agent, "task.status": status });
 
   const run = db.transaction(() => {
     const result = db.prepare(
@@ -110,7 +124,17 @@ export function updateTask(
     return result;
   });
 
-  return run();
+  try {
+    const result = run();
+    span.setStatus({ code: SpanStatusCode.OK });
+    span.end();
+    return result;
+  } catch (e: any) {
+    span.setStatus({ code: SpanStatusCode.ERROR, message: e.message });
+    span.recordException(e);
+    span.end();
+    throw e;
+  }
 }
 
 export function deleteTask(db: Database, id: number): boolean {

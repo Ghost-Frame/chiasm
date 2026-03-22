@@ -1,3 +1,4 @@
+import "./tracing.ts";
 import { createServer, type ServerResponse } from "node:http";
 import { createReadStream, existsSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
