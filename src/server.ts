@@ -96,7 +96,7 @@ function resolveAuth(authHeader: string | undefined): AuthIdentity | null {
 
 function isApiRequest(pathname: string): boolean {
   return pathname === "/health" || pathname === "/tasks" || pathname === "/feed"
-    || /^\/tasks\/\d+$/.test(pathname) || pathname.startsWith("/admin/");
+    || /^\/tasks(\/\d+)?(\/\w+)?$/.test(pathname) || pathname.startsWith("/admin/");
 }
 
 function applyCors(reqOrigin: string | undefined, res: ServerResponse) {

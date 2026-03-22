@@ -43,5 +43,20 @@ export function initDb(dbPath: string): Database {
     CREATE INDEX IF NOT EXISTS idx_agent_keys_hash ON agent_keys(key_hash);
   `);
 
+  // Migrations: add new columns if they don't exist yet
+  const migrations = [
+    "ALTER TABLE tasks ADD COLUMN expected_output TEXT",
+    "ALTER TABLE tasks ADD COLUMN output_format TEXT NOT NULL DEFAULT 'raw'",
+    "ALTER TABLE tasks ADD COLUMN output TEXT",
+    "ALTER TABLE tasks ADD COLUMN condition TEXT",
+    "ALTER TABLE tasks ADD COLUMN guardrail_url TEXT",
+    "ALTER TABLE tasks ADD COLUMN guardrail_retries INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN plan TEXT",
+    "ALTER TABLE tasks ADD COLUMN feedback TEXT",
+  ];
+  for (const stmt of migrations) {
+    try { db.exec(stmt); } catch { /* column already exists */ }
+  }
+
   return db;
 }
