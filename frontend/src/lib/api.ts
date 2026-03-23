@@ -5,8 +5,30 @@ export interface Task {
   title: string;
   status: string;
   summary: string | null;
+  last_heartbeat: string | null;
+  heartbeat_interval: number;
+  assigned: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface PathClaim {
+  id: number;
+  task_id: number;
+  agent: string;
+  project: string;
+  path: string;
+  claimed_at: string;
+  expires_at: string;
+  released: number;
+}
+
+export interface PathConflict {
+  claim_id: number;
+  task_id: number;
+  agent: string;
+  path: string;
+  claimed_path: string;
 }
 
 export interface FeedEntry {
@@ -125,4 +147,46 @@ export async function deleteTask(id: number): Promise<void> {
     }
     throw new Error(`${res.status}: ${message}`);
   }
+}
+
+// ============================================================================
+// PATH CLAIMS
+// ============================================================================
+
+export async function fetchClaims(project: string): Promise<PathClaim[]> {
+  return apiFetch<PathClaim[]>(`${BASE}/claims?project=${encodeURIComponent(project)}`);
+}
+
+export async function fetchTaskClaims(taskId: number): Promise<PathClaim[]> {
+  return apiFetch<PathClaim[]>(`${BASE}/tasks/${taskId}/claims`);
+}
+
+export async function checkConflicts(
+  project: string,
+  paths: string[],
+  excludeTask?: number,
+): Promise<{ conflicts: PathConflict[]; has_conflicts: boolean }> {
+  return apiFetch(`${BASE}/claims/check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project, paths, exclude_task: excludeTask }),
+  });
+}
+
+// ============================================================================
+// HEARTBEAT
+// ============================================================================
+
+export async function sendHeartbeat(taskId: number): Promise<Task> {
+  return apiFetch<Task>(`${BASE}/tasks/${taskId}/heartbeat`, { method: "POST" });
+}
+
+// ============================================================================
+// DEPENDENCIES
+// ============================================================================
+
+export async function fetchDependencies(
+  taskId: number,
+): Promise<{ dependencies: { depends_on: number; status: string; title: string; agent: string }[] }> {
+  return apiFetch(`${BASE}/tasks/${taskId}/dependencies`);
 }

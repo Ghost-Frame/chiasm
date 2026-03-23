@@ -8,6 +8,8 @@ export default defineConfig({
       "/tasks": "http://localhost:4300",
       "/feed": "http://localhost:4300",
       "/health": "http://localhost:4300",
+      "/claims": "http://localhost:4300",
+      "/queue": "http://localhost:4300",
     },
   },
 });

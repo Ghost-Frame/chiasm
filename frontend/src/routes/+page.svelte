@@ -233,8 +233,24 @@
     active: "LIVE",
     paused: "STANDBY",
     blocked: "ALERT",
+    stale: "STALE",
+    queued: "QUEUE",
     completed: "COMPLETE",
   };
+
+  function heartbeatStatus(task: Task): "alive" | "warning" | "stale" | "none" {
+    if (!task.last_heartbeat) return "none";
+    const hb = new Date(task.last_heartbeat + "Z").getTime();
+    const now = Date.now();
+    const elapsed = (now - hb) / 1000;
+    const interval = task.heartbeat_interval || 300;
+    if (elapsed < interval * 1.5) return "alive";
+    if (elapsed < interval * 2) return "warning";
+    return "stale";
+  }
+
+  // Track claims per project for display
+  let projectClaims = $state<Record<number, api.PathClaim[]>>({});
 
   function agentColor(agent: string): string {
     return AGENT_COLORS[agent] ?? "var(--text-dim)";
@@ -282,6 +298,20 @@
       feed = f;
       authRequired = false;
       errorMsg = "";
+
+      // Fetch claims for active tasks
+      const claimsMap: Record<number, api.PathClaim[]> = {};
+      const activeProjects = [...new Set(t.filter(tk => tk.status !== "completed").map(tk => tk.project))];
+      for (const proj of activeProjects) {
+        try {
+          const claims = await api.fetchClaims(proj);
+          for (const claim of claims) {
+            if (!claimsMap[claim.task_id]) claimsMap[claim.task_id] = [];
+            claimsMap[claim.task_id].push(claim);
+          }
+        } catch { /* claims endpoint may not exist on older backends */ }
+      }
+      projectClaims = claimsMap;
 
       // Accumulate all known agents/projects for filter dropdowns
       const agents = new Set(allKnownAgents);
@@ -494,7 +524,7 @@
     <div class="loading">ESTABLISHING UPLINK...</div>
   {:else if view === "board"}
     <div class="board">
-      {#each ["active", "paused", "blocked", "completed"] as status}
+      {#each ["active", "paused", "blocked", "queued", "stale", "completed"] as status}
         {@const statusTasks = tasksByStatus(status)}
         <div
           class="column"
@@ -520,7 +550,7 @@
                   class="breathing-card"
                   class:is-flipped={isFlipped}
                   data-task-id={task.id}
-                  style="--float-delay: {(i * 0.7) + (["active","paused","blocked","completed"].indexOf(status) * 0.3)}s; --breathe-delay: {(i * 1.1) + (["active","paused","blocked","completed"].indexOf(status) * 0.5)}s"
+                  style="--float-delay: {(i * 0.7) + (["active","paused","blocked","queued","stale","completed"].indexOf(status) * 0.3)}s; --breathe-delay: {(i * 1.1) + (["active","paused","blocked","queued","stale","completed"].indexOf(status) * 0.5)}s"
                 >
                   <div class="breathing-inner">
                     <!-- Front -->
@@ -534,7 +564,12 @@
                     >
                       <div class="card-top">
                         <span class="agent-tag" style="--agent-color: {agentColor(task.agent)}">{task.agent}</span>
-                        <span class="card-time">{timeAgo(task.updated_at)}</span>
+                        <span class="card-time">
+                          {timeAgo(task.updated_at)}
+                          {#if heartbeatStatus(task) !== "none"}
+                            <span class="heartbeat-dot" data-hb={heartbeatStatus(task)} title="Heartbeat: {heartbeatStatus(task)}"></span>
+                          {/if}
+                        </span>
                       </div>
                       <div class="card-project">{task.project}</div>
                       <div class="card-title">{task.title}</div>
@@ -564,6 +599,19 @@
                         <div class="detail-row"><span class="detail-label">UPDATED</span><span>{timeAgo(task.updated_at)}</span></div>
                         {#if task.summary}
                           <div class="detail-row detail-summary"><span class="detail-label">NOTES</span><span>{task.summary}</span></div>
+                        {/if}
+                        {#if projectClaims[task.id]?.length}
+                          <div class="detail-row detail-claims">
+                            <span class="detail-label">CLAIMS</span>
+                            <div class="claims-list">
+                              {#each projectClaims[task.id] as claim}
+                                <span class="claim-path">{claim.path}</span>
+                              {/each}
+                            </div>
+                          </div>
+                        {/if}
+                        {#if task.last_heartbeat}
+                          <div class="detail-row"><span class="detail-label">HEARTBEAT</span><span class="detail-status" data-status={heartbeatStatus(task) === "alive" ? "active" : heartbeatStatus(task) === "warning" ? "paused" : "blocked"}>{timeAgo(task.last_heartbeat)}</span></div>
                         {/if}
                       </div>
                     </div>
@@ -820,7 +868,7 @@
   /* ---- BOARD ---- */
   .board {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 0.75rem;
     align-items: start;
   }
@@ -837,6 +885,8 @@
 
   .column[data-status="active"] { border-color: rgba(212, 160, 48, 0.25); }
   .column[data-status="blocked"] { border-color: rgba(192, 66, 42, 0.2); }
+  .column[data-status="stale"] { border-color: rgba(136, 102, 68, 0.25); }
+  .column[data-status="queued"] { border-color: rgba(102, 136, 170, 0.2); }
 
   .column.drag-over {
     border-color: var(--accent) !important;
@@ -864,6 +914,8 @@
   }
   .status-indicator[data-status="paused"] { background: var(--paused); box-shadow: 0 0 4px var(--paused-glow); }
   .status-indicator[data-status="blocked"] { background: var(--blocked); animation: alert-pulse 1.5s ease-in-out infinite; }
+  .status-indicator[data-status="stale"] { background: #886644; animation: alert-pulse 2s ease-in-out infinite; }
+  .status-indicator[data-status="queued"] { background: #6688aa; box-shadow: 0 0 4px rgba(102, 136, 170, 0.4); }
   .status-indicator[data-status="completed"] { background: var(--completed); }
 
   .column-title { font-size: 0.8rem; font-weight: 700; letter-spacing: 0.1em; }
@@ -971,6 +1023,8 @@
   .card[data-status="active"] { border-left: 2px solid var(--active); }
   .card[data-status="blocked"] { border-left: 2px solid var(--blocked); }
   .card[data-status="paused"] { border-left: 2px solid var(--paused); }
+  .card[data-status="stale"] { border-left: 2px solid #886644; opacity: 0.5; }
+  .card[data-status="queued"] { border-left: 2px solid #6688aa; }
   .card[data-status="completed"] { border-left: 2px solid var(--completed); opacity: 0.6; }
 
   :global(.card.dragging) { opacity: 0.4; transform: scale(0.95); }
@@ -993,7 +1047,28 @@
     background: var(--agent-color);
   }
 
-  .card-time { font-size: 0.6rem; color: var(--text-dim); }
+  .card-time { font-size: 0.6rem; color: var(--text-dim); display: flex; align-items: center; gap: 0.3rem; }
+
+  .heartbeat-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+  .heartbeat-dot[data-hb="alive"] { background: #88b068; box-shadow: 0 0 4px rgba(136, 176, 104, 0.6); }
+  .heartbeat-dot[data-hb="warning"] { background: #e0a040; animation: alert-pulse 1.5s ease-in-out infinite; }
+  .heartbeat-dot[data-hb="stale"] { background: #c84040; animation: alert-pulse 1s ease-in-out infinite; }
+
+  .claims-list { display: flex; flex-direction: column; gap: 0.15rem; }
+  .claim-path {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--accent);
+    background: rgba(255, 255, 255, 0.04);
+    padding: 0.1rem 0.3rem;
+    border-radius: 2px;
+    border-left: 2px solid var(--accent-dim);
+  }
 
   .card-project {
     font-size: 0.65rem;
@@ -1080,6 +1155,8 @@
   .detail-status[data-status="active"] { color: var(--active); }
   .detail-status[data-status="paused"] { color: var(--paused); }
   .detail-status[data-status="blocked"] { color: var(--blocked); }
+  .detail-status[data-status="stale"] { color: #886644; }
+  .detail-status[data-status="queued"] { color: #6688aa; }
   .detail-status[data-status="completed"] { color: var(--completed); }
 
   .detail-summary span { color: var(--text-dim); font-style: italic; }
@@ -1124,6 +1201,8 @@
   .feed-status[data-status="active"] { color: var(--active); }
   .feed-status[data-status="paused"] { color: var(--paused); }
   .feed-status[data-status="blocked"] { color: var(--blocked); }
+  .feed-status[data-status="stale"] { color: #886644; }
+  .feed-status[data-status="queued"] { color: #6688aa; }
   .feed-status[data-status="completed"] { color: var(--completed); }
 
   .feed-target { color: var(--text); }

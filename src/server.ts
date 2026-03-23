@@ -6,7 +6,8 @@ import { stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initDb } from "./db/schema.ts";
-import { pruneTaskUpdates, lookupAgentKey, createAgentKey, listAgentKeys, revokeAgentKey } from "./db/queries.ts";
+import { pruneTaskUpdates, lookupAgentKey, createAgentKey, listAgentKeys, revokeAgentKey, markStaleTasks } from "./db/queries.ts";
+import { emitEvent } from "./axon.ts";
 import { handleTaskRoutes } from "./routes/tasks.ts";
 
 const DB_PATH = process.env.DB_PATH ?? "./chiasm.db";
@@ -62,6 +63,18 @@ setInterval(() => {
   pruneTaskUpdates(db, TASK_UPDATE_MAX_ROWS, TASK_UPDATE_MAX_AGE_DAYS);
 }, 5 * 60 * 1000).unref();
 
+// Heartbeat stale-check: mark tasks as stale if heartbeat is overdue
+const HEARTBEAT_CHECK_MS = envInt(process.env.HEARTBEAT_CHECK_MS, 60_000);
+setInterval(() => {
+  const staleTasks = markStaleTasks(db, 2);
+  for (const task of staleTasks) {
+    emitEvent("tasks", "task.stale", {
+      agent: task.agent, project: task.project,
+      title: task.title, task_id: task.id,
+    });
+  }
+}, HEARTBEAT_CHECK_MS).unref();
+
 // ============================================================================
 // AUTH - per-agent keys with admin escalation
 // ============================================================================
@@ -96,7 +109,10 @@ function resolveAuth(authHeader: string | undefined): AuthIdentity | null {
 
 function isApiRequest(pathname: string): boolean {
   return pathname === "/health" || pathname === "/tasks" || pathname === "/feed"
-    || /^\/tasks(\/\d+)?(\/\w+)?$/.test(pathname) || pathname.startsWith("/admin/");
+    || /^\/tasks(\/\d+)?(\/\w+)?(\/\d+)?$/.test(pathname)
+    || pathname.startsWith("/admin/")
+    || pathname.startsWith("/claims")
+    || pathname.startsWith("/queue");
 }
 
 function applyCors(reqOrigin: string | undefined, res: ServerResponse) {

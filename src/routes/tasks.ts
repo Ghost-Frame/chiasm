@@ -11,6 +11,18 @@ import {
   getFeed,
   submitOutput,
   submitFeedback,
+  createClaims,
+  releaseClaims,
+  releaseClaimsByPath,
+  checkConflicts,
+  getClaimsForTask,
+  getClaimsForProject,
+  recordHeartbeat,
+  addDependencies,
+  removeDependency,
+  getDependencies,
+  enqueueTask,
+  claimNextTask,
 } from "../db/queries.ts";
 
 export interface RouteOptions {
@@ -36,7 +48,7 @@ const DEFAULT_ROUTE_OPTIONS: RouteOptions = {
   taskUpdateMaxAgeDays: 30,
 };
 
-const VALID_STATUSES = new Set(["active", "paused", "blocked", "completed", "blocked_on_human"]);
+const VALID_STATUSES = new Set(["active", "paused", "blocked", "completed", "blocked_on_human", "stale", "queued"]);
 
 function json(res: ServerResponse, data: unknown, status = 200) {
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -277,6 +289,199 @@ export function handleTaskRoutes(
         return json(res, task);
       })
       .catch((err: any) => error(res, `Plan generation failed: ${err.message}`));
+  }
+
+  // ============================================================================
+  // PATH CLAIMS
+  // ============================================================================
+
+  // POST /tasks/:id/claims — create path claims
+  const claimsMatch = pathname.match(/^\/tasks\/(\d+)\/claims$/);
+  if (claimsMatch && req.method === "POST") {
+    return readBody(req, options.bodyMaxBytes).then((body) => {
+      const id = parseInt(claimsMatch[1], 10);
+      const existing = getTask(db, id);
+      if (!existing) return error(res, "Task not found", 404);
+      if (!canActOnAgent(auth, existing.agent)) {
+        return error(res, `Agent key for "${auth.agent}" cannot manage claims for "${existing.agent}"`, 403);
+      }
+
+      const paths = body.paths;
+      if (!Array.isArray(paths) || paths.length === 0 || !paths.every(p => typeof p === "string")) {
+        return error(res, "paths must be a non-empty array of strings");
+      }
+      const ttl = typeof body.ttl === "number" ? body.ttl : undefined;
+      const force = body.force === true;
+
+      const conflicts = checkConflicts(db, existing.project, paths as string[], id);
+      if (conflicts.length > 0 && !force) {
+        return json(res, { error: "Path conflicts detected", conflicts }, 409);
+      }
+
+      const claims = createClaims(db, id, existing.agent, existing.project, paths as string[], ttl);
+      return json(res, { claims, conflicts: conflicts.length > 0 ? conflicts : undefined }, 201);
+    }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
+  }
+
+  // DELETE /tasks/:id/claims — release claims
+  if (claimsMatch && req.method === "DELETE") {
+    const id = parseInt(claimsMatch[1], 10);
+    const existing = getTask(db, id);
+    if (!existing) return error(res, "Task not found", 404);
+    if (!canActOnAgent(auth, existing.agent)) {
+      return error(res, `Agent key for "${auth.agent}" cannot manage claims for "${existing.agent}"`, 403);
+    }
+
+    // Try to read body for selective release, fall back to release all
+    return readBody(req, options.bodyMaxBytes).then((body) => {
+      const paths = body.paths;
+      if (Array.isArray(paths) && paths.length > 0) {
+        const released = releaseClaimsByPath(db, id, paths as string[]);
+        return json(res, { released });
+      }
+      const released = releaseClaims(db, id);
+      return json(res, { released });
+    }).catch(() => {
+      const released = releaseClaims(db, id);
+      return json(res, { released });
+    });
+  }
+
+  // GET /tasks/:id/claims — list claims for a task
+  if (claimsMatch && req.method === "GET") {
+    const id = parseInt(claimsMatch[1], 10);
+    const existing = getTask(db, id);
+    if (!existing) return error(res, "Task not found", 404);
+    return json(res, getClaimsForTask(db, id));
+  }
+
+  // POST /claims/check — pre-flight conflict check
+  if (pathname === "/claims/check" && req.method === "POST") {
+    return readBody(req, options.bodyMaxBytes).then((body) => {
+      const project = body.project;
+      const paths = body.paths;
+      const excludeTask = typeof body.exclude_task === "number" ? body.exclude_task : undefined;
+
+      if (!project || typeof project !== "string") return error(res, "project is required");
+      if (!Array.isArray(paths) || paths.length === 0) return error(res, "paths must be a non-empty array");
+
+      const conflicts = checkConflicts(db, project, paths as string[], excludeTask);
+      return json(res, { conflicts, has_conflicts: conflicts.length > 0 });
+    }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
+  }
+
+  // GET /claims?project=X — all active claims for a project
+  if (pathname === "/claims" && req.method === "GET") {
+    const project = url.searchParams.get("project");
+    if (!project) return error(res, "project query parameter is required");
+    return json(res, getClaimsForProject(db, project));
+  }
+
+  // ============================================================================
+  // HEARTBEAT
+  // ============================================================================
+
+  // POST /tasks/:id/heartbeat
+  const heartbeatMatch = pathname.match(/^\/tasks\/(\d+)\/heartbeat$/);
+  if (heartbeatMatch && req.method === "POST") {
+    const id = parseInt(heartbeatMatch[1], 10);
+    const existing = getTask(db, id);
+    if (!existing) return error(res, "Task not found", 404);
+    if (!canActOnAgent(auth, existing.agent)) {
+      return error(res, `Agent key for "${auth.agent}" cannot heartbeat for "${existing.agent}"`, 403);
+    }
+
+    const task = recordHeartbeat(db, id);
+    if (!task) return error(res, "Task not found", 404);
+    return json(res, task);
+  }
+
+  // ============================================================================
+  // DEPENDENCIES
+  // ============================================================================
+
+  // POST /tasks/:id/dependencies — add dependencies
+  const depsMatch = pathname.match(/^\/tasks\/(\d+)\/dependencies$/);
+  if (depsMatch && req.method === "POST") {
+    return readBody(req, options.bodyMaxBytes).then((body) => {
+      const id = parseInt(depsMatch[1], 10);
+      const existing = getTask(db, id);
+      if (!existing) return error(res, "Task not found", 404);
+      if (!canActOnAgent(auth, existing.agent)) {
+        return error(res, `Agent key for "${auth.agent}" cannot manage dependencies for "${existing.agent}"`, 403);
+      }
+
+      const dependsOn = body.depends_on;
+      if (!Array.isArray(dependsOn) || dependsOn.length === 0 || !dependsOn.every(d => typeof d === "number")) {
+        return error(res, "depends_on must be a non-empty array of task IDs");
+      }
+
+      try {
+        addDependencies(db, id, dependsOn as number[]);
+        const deps = getDependencies(db, id);
+        return json(res, { dependencies: deps }, 201);
+      } catch (e: any) {
+        return error(res, e.message);
+      }
+    }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
+  }
+
+  // GET /tasks/:id/dependencies
+  if (depsMatch && req.method === "GET") {
+    const id = parseInt(depsMatch[1], 10);
+    const existing = getTask(db, id);
+    if (!existing) return error(res, "Task not found", 404);
+    return json(res, { dependencies: getDependencies(db, id) });
+  }
+
+  // DELETE /tasks/:id/dependencies/:depId
+  const depDeleteMatch = pathname.match(/^\/tasks\/(\d+)\/dependencies\/(\d+)$/);
+  if (depDeleteMatch && req.method === "DELETE") {
+    const id = parseInt(depDeleteMatch[1], 10);
+    const depId = parseInt(depDeleteMatch[2], 10);
+    const existing = getTask(db, id);
+    if (!existing) return error(res, "Task not found", 404);
+    if (!canActOnAgent(auth, existing.agent)) {
+      return error(res, `Agent key for "${auth.agent}" cannot manage dependencies for "${existing.agent}"`, 403);
+    }
+
+    if (!removeDependency(db, id, depId)) return error(res, "Dependency not found", 404);
+    return json(res, { ok: true });
+  }
+
+  // ============================================================================
+  // WORK QUEUE
+  // ============================================================================
+
+  // POST /queue — enqueue unassigned task (admin only)
+  if (pathname === "/queue" && req.method === "POST") {
+    if (auth.role !== "admin") return error(res, "Admin access required to enqueue tasks", 403);
+    return readBody(req, options.bodyMaxBytes).then((body) => {
+      const { project, title, summary, expected_output, condition } = body as {
+        project?: string; title?: string; summary?: string; expected_output?: string; condition?: string;
+      };
+      if (!project || !title) return error(res, "project and title are required");
+      if (typeof project !== "string" || typeof title !== "string") return error(res, "project and title must be strings");
+
+      const task = enqueueTask(db, { project, title, summary, expected_output, condition });
+      return json(res, task, 201);
+    }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
+  }
+
+  // POST /queue/claim — claim next available task
+  if (pathname === "/queue/claim" && req.method === "POST") {
+    return readBody(req, options.bodyMaxBytes).then((body) => {
+      const agent = typeof body.agent === "string" ? body.agent : auth.agent;
+      if (!agent) return error(res, "agent is required");
+      if (!canActOnAgent(auth, agent)) {
+        return error(res, `Agent key for "${auth.agent}" cannot claim tasks for "${agent}"`, 403);
+      }
+
+      const project = typeof body.project === "string" ? body.project : undefined;
+      const task = claimNextTask(db, agent, project);
+      if (!task) return json(res, { message: "No tasks available in queue" }, 204);
+      return json(res, task);
+    }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
   }
 
   // GET /feed
