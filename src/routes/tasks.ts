@@ -220,6 +220,14 @@ export function handleTaskRoutes(
         return error(res, `Invalid status. Must be one of: ${[...VALID_STATUSES].join(", ")}`);
       }
 
+      // Hard reject: completing a task requires a non-blank summary
+      if (bodyData.status === "completed") {
+        const summary = (typeof bodyData.summary === "string" ? bodyData.summary : (existing.summary ?? "")).trim();
+        if (!summary) {
+          return error(res, "summary is required when completing a task -- document what you did");
+        }
+      }
+
       const task = updateTask(db, taskId!, bodyData as { status?: string; summary?: string; plan?: string; feedback?: string });
       if (!task) return error(res, "Task not found", 404);
       return json(res, task);
