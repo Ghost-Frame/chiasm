@@ -605,3 +605,21 @@ export function pruneTaskUpdates(db: Database, maxRows: number, maxAgeDays: numb
     `).run(maxRows);
   }
 }
+
+// ============================================================================
+// STATS
+// ============================================================================
+
+export function getChiasmStats(db: Database) {
+  const total = (db.prepare("SELECT COUNT(*) as count FROM tasks").get() as any).count;
+  const by_status = db.prepare(
+    "SELECT status, COUNT(*) as count FROM tasks GROUP BY status ORDER BY count DESC",
+  ).all();
+  const by_project = db.prepare(
+    "SELECT project, COUNT(*) as count FROM tasks GROUP BY project ORDER BY count DESC",
+  ).all();
+  const active_claims = (db.prepare(
+    "SELECT COUNT(*) as count FROM path_claims WHERE released = 0 AND expires_at > datetime('now')",
+  ).get() as any).count;
+  return { total, by_status, by_project, active_claims };
+}

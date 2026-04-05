@@ -23,6 +23,7 @@ import {
   getDependencies,
   enqueueTask,
   claimNextTask,
+  getChiasmStats,
 } from "../db/queries.ts";
 
 export interface RouteOptions {
@@ -192,6 +193,11 @@ export function handleTaskRoutes(
       const task = createTask(db, { agent, project, title, summary, expected_output, output_format, condition, guardrail_url });
       return json(res, task, 201);
     }).catch((err) => error(res, err instanceof Error ? err.message : "Invalid request body", requestErrorStatus(err)));
+  }
+
+  // GET /tasks/stats
+  if (pathname === "/tasks/stats" && req.method === "GET") {
+    return json(res, getChiasmStats(db));
   }
 
   const taskMatch = pathname.match(/^\/tasks\/(\d+)$/);
