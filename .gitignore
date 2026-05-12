@@ -8,3 +8,6 @@ start.bat
 frontend/node_modules/
 frontend/.svelte-kit/
 frontend/build/
+CLAUDE.md
+AGENTS.md
+GROWTH.md
