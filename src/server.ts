@@ -26,6 +26,7 @@ if (!ADMIN_KEY && !AUTH_DISABLED) {
   process.exit(1);
 }
 
+// Parses an integer environment setting and falls back when invalid.
 function envInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -63,10 +64,13 @@ setInterval(() => {
   pruneTaskUpdates(db, TASK_UPDATE_MAX_ROWS, TASK_UPDATE_MAX_AGE_DAYS);
 }, 5 * 60 * 1000).unref();
 
-// Heartbeat stale-check: mark tasks as stale if heartbeat is overdue
+// Heartbeat stale-check: mark tasks as stale if heartbeat is overdue, or if
+// a task was never heartbeated and has gone idle past HEARTBEAT_IDLE_SECS
+// (otherwise a task with last_heartbeat IS NULL never stales).
 const HEARTBEAT_CHECK_MS = envInt(process.env.HEARTBEAT_CHECK_MS, 60_000);
+const HEARTBEAT_IDLE_SECS = envInt(process.env.HEARTBEAT_IDLE_SECS, 3600);
 setInterval(() => {
-  const staleTasks = markStaleTasks(db, 2);
+  const staleTasks = markStaleTasks(db, 2, HEARTBEAT_IDLE_SECS);
   for (const task of staleTasks) {
     emitEvent("tasks", "task.stale", {
       agent: task.agent, project: task.project,
@@ -80,12 +84,15 @@ setInterval(() => {
 // ============================================================================
 
 import type { AuthIdentity } from "./types.ts";
+// Re-exports the authenticated caller shape for route consumers.
 export type { AuthIdentity } from "./types.ts";
 
+// Hashes an API key before database lookup.
 function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
+// Resolves a bearer token into an authenticated agent identity.
 function resolveAuth(authHeader: string | undefined): AuthIdentity | null {
   // Explicit opt-in to no-auth mode
   if (AUTH_DISABLED) return { role: "admin", agent: null };
@@ -115,6 +122,7 @@ function isApiRequest(pathname: string): boolean {
     || pathname.startsWith("/queue");
 }
 
+// Applies the configured CORS policy to one response.
 function applyCors(reqOrigin: string | undefined, res: ServerResponse) {
   if (!CORS_ALLOW_ORIGIN) return;
   if (CORS_ALLOW_ORIGIN === "*" || reqOrigin === CORS_ALLOW_ORIGIN) {
@@ -125,11 +133,13 @@ function applyCors(reqOrigin: string | undefined, res: ServerResponse) {
   }
 }
 
+// Writes a JSON response with an explicit HTTP status.
 function jsonResponse(res: ServerResponse, data: unknown, status = 200) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(data));
 }
 
+// Reads and validates a size-limited JSON object request body.
 async function readJsonBody(req: import("node:http").IncomingMessage, maxBytes: number): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -224,6 +234,7 @@ function sendFile(res: ServerResponse, filePath: string, method: string) {
   stream.pipe(res);
 }
 
+// Serves the built dashboard or its static assets.
 async function serveFrontend(pathname: string, method: string, res: ServerResponse) {
   if (!HAS_FRONTEND_BUILD || (method !== "GET" && method !== "HEAD")) return false;
   const decodedPathname = decodeURIComponent(pathname);

@@ -1,8 +1,10 @@
 import type DatabaseConstructor from "libsql";
+// Represents the initialized SQLite database used by coordination queries.
 type Database = InstanceType<typeof DatabaseConstructor>;
 import { startSpan, SpanStatusCode } from "../tracing.ts";
 import { emitEvent } from "../axon.ts";
 
+// Describes one coordinated unit of work and its current lifecycle state.
 export interface Task {
   id: number;
   agent: string;
@@ -25,6 +27,7 @@ export interface Task {
   updated_at: string;
 }
 
+// Describes an exclusive filesystem path claim held by a task.
 export interface PathClaim {
   id: number;
   task_id: number;
@@ -36,6 +39,7 @@ export interface PathClaim {
   released: number;
 }
 
+// Reports a requested path that conflicts with an existing claim.
 export interface PathConflict {
   claim_id: number;
   task_id: number;
@@ -44,6 +48,7 @@ export interface PathConflict {
   claimed_path: string;
 }
 
+// Describes a stored agent API key record without exposing the raw key.
 export interface AgentKey {
   id: number;
   agent: string;
@@ -54,6 +59,7 @@ export interface AgentKey {
   revoked: number;
 }
 
+// Records one immutable task-history entry.
 export interface TaskUpdate {
   id: number;
   task_id: number;
@@ -63,6 +69,7 @@ export interface TaskUpdate {
   created_at: string;
 }
 
+// Defines optional filters accepted by task-list queries.
 export interface TaskFilters {
   agent?: string;
   project?: string;
@@ -71,6 +78,7 @@ export interface TaskFilters {
   offset?: number;
 }
 
+// Lists tasks matching the supplied coordination filters.
 export function listTasks(db: Database, filters: TaskFilters = {}): Task[] {
   let query = "SELECT * FROM tasks WHERE 1=1";
   const params: Array<string | number> = [];
@@ -85,10 +93,12 @@ export function listTasks(db: Database, filters: TaskFilters = {}): Task[] {
   return db.prepare(query).all(...params) as Task[];
 }
 
+// Retrieves one task by numeric identifier.
 export function getTask(db: Database, id: number): Task | undefined {
   return db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as Task | undefined;
 }
 
+// Creates a task and records its initial history entry.
 export function createTask(
   db: Database,
   data: {
@@ -138,6 +148,7 @@ export function createTask(
   }
 }
 
+// Applies a partial task update and records the resulting state change.
 export function updateTask(
   db: Database,
   id: number,
@@ -191,10 +202,12 @@ export function updateTask(
   }
 }
 
+// Deletes one task and reports whether a row was removed.
 export function deleteTask(db: Database, id: number): boolean {
   return db.prepare("DELETE FROM tasks WHERE id = ?").run(id).changes > 0;
 }
 
+// Stores a task result and advances the task through its completion guardrail.
 export function submitOutput(db: Database, id: number, output: string): Task | undefined {
   const existing = getTask(db, id);
   if (!existing) return undefined;
@@ -216,6 +229,7 @@ export function submitOutput(db: Database, id: number, output: string): Task | u
   return result;
 }
 
+// Evaluates configured completion criteria for a submitted task.
 function runGuardrail(db: Database, task: Task) {
   fetch(task.guardrail_url!, {
     method: "POST",
@@ -259,6 +273,7 @@ function runGuardrail(db: Database, task: Task) {
     });
 }
 
+// Records review feedback and returns a completed task to active work.
 export function submitFeedback(db: Database, id: number, feedback: string): Task | undefined {
   const existing = getTask(db, id);
   if (!existing) return undefined;
@@ -276,6 +291,7 @@ export function submitFeedback(db: Database, id: number, feedback: string): Task
   return result;
 }
 
+// Returns recent task updates for the coordination activity feed.
 export function getFeed(
   db: Database,
   limit: number = 50,
@@ -290,12 +306,22 @@ export function getFeed(
   `).all(limit, offset) as (TaskUpdate & { project: string; title: string })[];
 }
 
+// Return the update history for a single task, newest first. Reads the
+// existing task_updates table (the same rows createTask/updateTask/etc.
+// already insert) filtered by task_id, so no schema change is needed.
+export function listTaskHistory(db: Database, taskId: number, limit: number = 100): TaskUpdate[] {
+  return db.prepare(
+    "SELECT * FROM task_updates WHERE task_id = ? ORDER BY id DESC LIMIT ?"
+  ).all(taskId, limit) as TaskUpdate[];
+}
+
 // ============================================================================
 // PATH CLAIMS
 // ============================================================================
 
 const DEFAULT_CLAIM_TTL = 1800; // 30 minutes
 
+// Creates exclusive path claims for a task after checking conflicts.
 export function createClaims(
   db: Database,
   taskId: number,
@@ -320,6 +346,7 @@ export function createClaims(
   return claims;
 }
 
+// Releases every path claim owned by a task.
 export function releaseClaims(db: Database, taskId: number): number {
   const result = db.prepare(
     "UPDATE path_claims SET released = 1 WHERE task_id = ? AND released = 0"
@@ -330,6 +357,7 @@ export function releaseClaims(db: Database, taskId: number): number {
   return result.changes;
 }
 
+// Releases selected path claims owned by a task.
 export function releaseClaimsByPath(db: Database, taskId: number, paths: string[]): number {
   let total = 0;
   for (const path of paths) {
@@ -340,6 +368,7 @@ export function releaseClaimsByPath(db: Database, taskId: number, paths: string[
   return total;
 }
 
+// Finds active claims that overlap a proposed set of paths.
 export function checkConflicts(
   db: Database,
   project: string,
@@ -367,18 +396,21 @@ export function checkConflicts(
   return conflicts;
 }
 
+// Lists every active path claim held by one task.
 export function getClaimsForTask(db: Database, taskId: number): PathClaim[] {
   return db.prepare(
     "SELECT * FROM path_claims WHERE task_id = ? AND released = 0 AND expires_at > datetime('now') ORDER BY path"
   ).all(taskId) as PathClaim[];
 }
 
+// Lists active path claims within one project.
 export function getClaimsForProject(db: Database, project: string): PathClaim[] {
   return db.prepare(
     "SELECT * FROM path_claims WHERE project = ? AND released = 0 AND expires_at > datetime('now') ORDER BY path"
   ).all(project) as PathClaim[];
 }
 
+// Extends the expiry time of all path claims held by a task.
 export function refreshClaimExpiry(db: Database, taskId: number, ttlSeconds: number = DEFAULT_CLAIM_TTL): number {
   return db.prepare(
     "UPDATE path_claims SET expires_at = datetime('now', '+' || ? || ' seconds') WHERE task_id = ? AND released = 0"
@@ -403,21 +435,42 @@ export function recordHeartbeat(db: Database, taskId: number): Task | undefined 
   return result;
 }
 
-export function markStaleTasks(db: Database, graceMultiplier: number = 2): Task[] {
+// Scan for overdue tasks and mark them stale. A task (status "active" or
+// "paused") is stale under either condition:
+//   - Heartbeat overdue: last_heartbeat is set and older than
+//     heartbeat_interval * graceMultiplier seconds.
+//   - Idle without heartbeat: last_heartbeat is NULL (the task never sent
+//     one, e.g. created via a fire-and-forget activity report) and
+//     updated_at is older than noHeartbeatIdleSecs. Without this branch a
+//     never-heartbeated task was permanently immune to staling and would
+//     accumulate as a ghost in the active set forever.
+// For each stale task, status is flipped to "stale", a task_updates row
+// records the reason, and any held path claims are released.
+export function markStaleTasks(
+  db: Database,
+  graceMultiplier: number = 2,
+  noHeartbeatIdleSecs: number = 3600,
+): Task[] {
   const staleTasks = db.prepare(`
     SELECT * FROM tasks
     WHERE status IN ('active', 'paused')
-      AND last_heartbeat IS NOT NULL
-      AND last_heartbeat < datetime('now', '-' || (heartbeat_interval * ?) || ' seconds')
-  `).all(graceMultiplier) as Task[];
+      AND (
+        (last_heartbeat IS NOT NULL
+         AND last_heartbeat < datetime('now', '-' || (heartbeat_interval * ?) || ' seconds'))
+        OR
+        (last_heartbeat IS NULL
+         AND updated_at < datetime('now', '-' || ? || ' seconds'))
+      )
+  `).all(graceMultiplier, noHeartbeatIdleSecs) as Task[];
 
   for (const task of staleTasks) {
+    const reason = task.last_heartbeat === null ? "Idle timeout, no heartbeat received" : "Heartbeat timeout";
     db.prepare(
       "UPDATE tasks SET status = 'stale', updated_at = datetime('now') WHERE id = ?"
     ).run(task.id);
     db.prepare(
-      "INSERT INTO task_updates (task_id, agent, status, summary) VALUES (?, ?, 'stale', 'Heartbeat timeout')"
-    ).run(task.id, task.agent);
+      "INSERT INTO task_updates (task_id, agent, status, summary) VALUES (?, ?, 'stale', ?)"
+    ).run(task.id, task.agent, reason);
     releaseClaims(db, task.id);
   }
 
@@ -447,6 +500,7 @@ export function hasCircularDependency(db: Database, taskId: number, targetId: nu
   return false;
 }
 
+// Adds dependency edges after validating that they remain acyclic.
 export function addDependencies(db: Database, taskId: number, dependsOn: number[]): void {
   const run = db.transaction(() => {
     for (const depId of dependsOn) {
@@ -462,12 +516,14 @@ export function addDependencies(db: Database, taskId: number, dependsOn: number[
   run();
 }
 
+// Removes one dependency edge from a task.
 export function removeDependency(db: Database, taskId: number, dependsOn: number): boolean {
   return db.prepare(
     "DELETE FROM task_dependencies WHERE task_id = ? AND depends_on = ?"
   ).run(taskId, dependsOn).changes > 0;
 }
 
+// Lists the tasks that a given task depends on.
 export function getDependencies(
   db: Database,
   taskId: number,
@@ -481,12 +537,14 @@ export function getDependencies(
   `).all(taskId) as { depends_on: number; status: string; title: string; agent: string }[];
 }
 
+// Lists task identifiers that depend on the supplied task.
 export function getDependents(db: Database, taskId: number): number[] {
   return (db.prepare(
     "SELECT task_id FROM task_dependencies WHERE depends_on = ?"
   ).all(taskId) as { task_id: number }[]).map(r => r.task_id);
 }
 
+// Unblocks dependents whose complete dependency set has finished.
 export function checkAndUnblock(db: Database, completedTaskId: number): Task[] {
   const dependents = getDependents(db, completedTaskId);
   const unblocked: Task[] = [];
@@ -533,6 +591,7 @@ export function enqueueTask(
   return result;
 }
 
+// Atomically assigns the next eligible queued task to an agent.
 export function claimNextTask(db: Database, agent: string, project?: string): Task | undefined {
   const run = db.transaction(() => {
     let query = "SELECT * FROM tasks WHERE status = 'queued' AND assigned = 0";
@@ -577,22 +636,26 @@ export function lookupAgentKey(db: Database, keyHash: string): AgentKey | undefi
   return key;
 }
 
+// Stores a hashed API key for an agent.
 export function createAgentKey(db: Database, agent: string, keyHash: string, keyPrefix: string): AgentKey {
   return db.prepare(
     "INSERT INTO agent_keys (agent, key_hash, key_prefix) VALUES (?, ?, ?) RETURNING *"
   ).get(agent, keyHash, keyPrefix) as AgentKey;
 }
 
+// Lists agent key metadata without returning key hashes.
 export function listAgentKeys(db: Database): Omit<AgentKey, "key_hash">[] {
   return db.prepare(
     "SELECT id, agent, key_prefix, created_at, last_used_at, revoked FROM agent_keys ORDER BY created_at DESC"
   ).all() as Omit<AgentKey, "key_hash">[];
 }
 
+// Revokes one stored agent key.
 export function revokeAgentKey(db: Database, id: number): boolean {
   return db.prepare("UPDATE agent_keys SET revoked = 1 WHERE id = ?").run(id).changes > 0;
 }
 
+// Prunes task history according to row-count and age retention limits.
 export function pruneTaskUpdates(db: Database, maxRows: number, maxAgeDays: number) {
   if (maxAgeDays > 0) {
     db.prepare("DELETE FROM task_updates WHERE created_at < datetime('now', ?)").run(`-${maxAgeDays} days`);

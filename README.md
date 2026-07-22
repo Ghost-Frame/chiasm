@@ -52,6 +52,7 @@ CHIASM_API_KEY=your-admin-key-here
 | `CHIASM_API_KEY` | **Required.** Admin API key for full access | - |
 | `CHIASM_AUTH` | Set to `disabled` to explicitly run without auth | - |
 | `CORS_ALLOW_ORIGIN` | Allowed CORS origin (`*` or specific origin) | disabled |
+| `HEARTBEAT_IDLE_SECS` | For tasks that never sent a heartbeat, how long they can sit idle (no `updated_at` change) before being marked stale | `3600` |
 
 The server **refuses to start** unless `CHIASM_API_KEY` is set or `CHIASM_AUTH=disabled` is explicitly configured. This prevents accidentally running with auth off.
 
@@ -104,6 +105,7 @@ All endpoints accept and return JSON. All endpoints except `/health` require aut
 | `GET` | `/tasks/:id` | any key | Get a single task |
 | `PATCH` | `/tasks/:id` | agent's own or admin | Update a task |
 | `DELETE` | `/tasks/:id` | agent's own or admin | Delete a task |
+| `GET` | `/tasks/:id/history?limit=100` | any key | Task update history (`task_updates` rows), newest first |
 
 ### Feed
 

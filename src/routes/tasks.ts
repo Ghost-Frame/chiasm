@@ -1,4 +1,5 @@
 import type DatabaseConstructor from "libsql";
+// Represents the initialized SQLite database accepted by task routes.
 type Database = InstanceType<typeof DatabaseConstructor>;
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthIdentity } from "../types.ts";
@@ -9,6 +10,7 @@ import {
   deleteTask,
   getTask,
   getFeed,
+  listTaskHistory,
   submitOutput,
   submitFeedback,
   createClaims,
@@ -26,6 +28,7 @@ import {
   getChiasmStats,
 } from "../db/queries.ts";
 
+// Supplies authentication, limits, and integrations used by task routes.
 export interface RouteOptions {
   bodyMaxBytes: number;
   tasksDefaultLimit: number;
@@ -51,15 +54,18 @@ const DEFAULT_ROUTE_OPTIONS: RouteOptions = {
 
 const VALID_STATUSES = new Set(["active", "paused", "blocked", "completed", "blocked_on_human", "stale", "queued"]);
 
+// Writes a JSON response with an explicit HTTP status.
 function json(res: ServerResponse, data: unknown, status = 200) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(data));
 }
 
+// Writes a JSON error response with an explicit HTTP status.
 function error(res: ServerResponse, message: string, status = 400) {
   json(res, { error: message }, status);
 }
 
+// Reads and validates a size-limited JSON object request body.
 async function readBody(req: IncomingMessage, maxBytes: number): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -105,16 +111,19 @@ async function readBody(req: IncomingMessage, maxBytes: number): Promise<Record<
   });
 }
 
+// Parses and clamps an integer query parameter to an allowed range.
 function parseBoundedInt(value: string | null, fallback: number, min: number, max: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(parsed, min), max);
 }
 
+// Maps a request-processing error to its public HTTP status.
 function requestErrorStatus(err: unknown): number {
   return err instanceof Error && err.message === "Request body too large" ? 413 : 400;
 }
 
+// Checks whether the authenticated identity may mutate another agent's task.
 function canActOnAgent(identity: AuthIdentity, taskAgent: string): boolean {
   if (identity.role === "admin") return true;
   return identity.agent === taskAgent;
@@ -149,6 +158,7 @@ Respond with a numbered list of concrete steps. Be specific and actionable.`;
   return data.result ?? data.text ?? data.content ?? JSON.stringify(data);
 }
 
+// Handles the complete task, dependency, claim, queue, and history API.
 export function handleTaskRoutes(
   db: Database,
   req: IncomingMessage,
@@ -249,6 +259,18 @@ export function handleTaskRoutes(
     }
     if (!deleteTask(db, taskId!)) return error(res, "Task not found", 404);
     return json(res, { ok: true });
+  }
+
+  // GET /tasks/:id/history returns task_updates rows for this task, newest first.
+  // Read-only, same auth pattern as GET /tasks/:id (any authenticated key).
+  const historyMatch = pathname.match(/^\/tasks\/(\d+)\/history$/);
+  if (historyMatch && req.method === "GET") {
+    const id = parseInt(historyMatch[1], 10);
+    const existing = getTask(db, id);
+    if (!existing) return error(res, "Task not found", 404);
+    const limit = parseBoundedInt(url.searchParams.get("limit"), 100, 1, 1000);
+    const history = listTaskHistory(db, id, limit);
+    return json(res, { history, count: history.length });
   }
 
   // POST /tasks/:id/output — submit task output, triggers guardrail if configured
