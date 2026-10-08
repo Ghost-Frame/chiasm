@@ -23,7 +23,7 @@ LABEL org.opencontainers.image.title="Chiasm" \
       org.opencontainers.image.url="https://github.com/zanfiel/chiasm" \
       org.opencontainers.image.source="https://github.com/zanfiel/chiasm" \
       org.opencontainers.image.documentation="https://github.com/zanfiel/chiasm#readme" \
-      org.opencontainers.image.licenses="Elastic-2.0" \
+      org.opencontainers.image.licenses="PolyForm-Noncommercial-1.0.0" \
       org.opencontainers.image.vendor="Syntheos"
 
 WORKDIR /app

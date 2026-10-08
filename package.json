@@ -1,6 +1,7 @@
 {
   "name": "chiasm",
   "version": "0.2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "description": "Multi-agent task coordination",
   "type": "module",
   "engines": {
